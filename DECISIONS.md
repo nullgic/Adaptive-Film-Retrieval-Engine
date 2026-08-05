@@ -90,15 +90,36 @@ genres, which is nearly content-free.
 
 ## D-006: `MAX_CAST = 20`
 
-**Chose:** top 20 billed cast members.
+**Chose:** top 20 billed cast members. "Top" means the `cast` entry's `order`
+field — TMDB's billing order, so `order: 0` is the lead. Checked on a 200-movie
+sample: 0 entries missing the key, 192/199 starting at 0.
 
-**Alternatives:** 5, 10, or all (~50 average).
+**Alternatives:** 5, 10, or all.
 
-**Why:** picked on judgement, not measured. More names help queries like "that
-movie with the guy from X"; fewer names keep the lexical document tighter.
+**Why:** the cutoff was judgement, but it was informed by the distribution:
 
-**How I'd settle it:** vary it across 5 / 10 / 20 / all, and measure recall on
-a set of cast-name queries. Currently untuned and I should say so.
+| median | mean | p90 | p95 | max |
+|---|---|---|---|---|
+| 10 | 12.4 | 23 | 32 | 313 |
+
+| cutoff | movies that reach it | names indexed |
+|---|---|---|
+| 5 | 37,207 (81.8%) | 202,490 |
+| 10 | 23,724 (52.2%) | 347,954 |
+| 20 | 6,608 (14.5%) | 474,165 |
+| all | — | 562,474 |
+
+Only 14.5% of films have 20+ cast, so 20 captures the *entire* cast for 85% of
+the corpus while costing 36% more names than 10. The dilution argument for a
+tighter cutoff was really an argument about embeddings, and per D-004 cast is
+lexical-only — in an inverted index, a query for a minor actor returning a film
+they appeared in is correct behaviour, not noise.
+
+**Cost:** larger `facets_text`, and the C-weight band carries more names that
+nobody will search for.
+
+**How I'd settle it:** vary across 5 / 10 / 20 / all and measure recall on a set
+of cast-name queries. The distribution is measured; the cutoff still isn't tuned.
 
 ---
 
@@ -106,15 +127,36 @@ a set of cast-name queries. Currently untuned and I should say so.
 
 **Chose:** sort by popularity descending, then `drop_duplicates(keep="first")`.
 
-**Alternatives:** keep whichever row appears first in the file; keep the most
-complete row; inspect all 30 duplicate pairs manually.
+**Alternatives:** keep whichever row appears first in the file; keep the row with
+the highest `vote_count`; inspect all the duplicate pairs manually.
 
-**Why:** 30 duplicate ids out of 45,466. Sorting first makes "first" mean
-"highest popularity" rather than "whatever order the CSV happened to be in",
-which makes the result deterministic and picks the more canonical row.
+**Verified — the pairs were inspected.** 29 distinct ids appear more than once
+(30 excess rows; one id appears three times). Of those:
 
-**TODO:** nobody checked whether the duplicate pairs actually differ in content.
-Worth one look.
+- **16 pairs are byte-identical** — the same row captured twice.
+- **13 pairs differ in exactly one field: `popularity`.**
+
+```
+id 132641:  popularity  ['0.096079', '0.619388']
+id  22649:  popularity  ['1.914697', '2.411191']
+id  84198:  popularity  ['0.501046', '1.673307']
+```
+
+Title, overview, vote_count and everything else are identical throughout. These
+are not different movies — `popularity` is a time-varying TMDB metric, and the
+dataset was scraped over a period, so the same film was captured at two moments.
+
+**Why:** popularity is the *only* field that moves, so the higher value is the
+more recent observation. Sorting descending before `keep="first"` makes "first"
+mean "most recent scrape" rather than "whatever order the CSV happened to be in",
+which is both deterministic and justifiable.
+
+**Why not `vote_count`:** it looks more principled and isn't. `vote_count` is
+**tied in 27 of the 29 groups**, so the rule would fall back to arbitrary 93% of
+the time while appearing to have a reason. Worse than admitting arbitrariness.
+
+**Cost:** for the 16 identical pairs the rule is a coin flip, which is fine —
+the rows are the same.
 
 ---
 
