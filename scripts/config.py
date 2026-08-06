@@ -32,3 +32,15 @@ CONTEXT_WINDOWS = {"all-MiniLM-L6-v2": 256, "BGE-small-en-v1.5": 512}
 # vector(N) column must match exactly or every insert fails.
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 EMBEDDING_DIM = 384
+
+# --- retrieval -------------------------------------------------------------
+
+# BGE is asymmetric: queries carry an instruction prefix, documents do not.
+# Applying this to documents instead of queries silently degrades every result,
+# with no error to notice.
+QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+# Candidates pulled from each arm before fusion, and the RRF constant. Both are
+# documented defaults rather than tuned values - see D-013.
+CANDIDATE_DEPTH = 50
+RRF_K = 60
