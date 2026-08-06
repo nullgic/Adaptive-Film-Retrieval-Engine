@@ -44,8 +44,53 @@ with a GIN index at 45k rows.
 renaming a genre would mean updating every row. A normalized schema would be
 the right call if genres were edited frequently or carried their own metadata.
 
-**TODO:** be able to explain why a databases course would teach the join table
-version, and why this project doesn't need it.
+**Answered — why a databases course teaches the join table, and why this schema
+does not need it.**
+
+Measured shape of the problem: **20** distinct genres, **2.00** per film on
+average (max 8), **2,442** films with none, **91,015** genre cells in total.
+The normalised form would be a `genres` table of 20 rows plus a `movie_genres`
+join table of 91,015 rows.
+
+A course teaches the join table for four reasons, and they are all real:
+
+1. **Update anomaly.** Renaming *Science Fiction* to *Sci-Fi* touches one row in
+   a `genres` table. With arrays it means rewriting the array in every affected
+   row. The same fact is stored 20,244 times for *Drama* alone, and anything
+   stored many times can disagree with itself.
+2. **Referential integrity.** A foreign key makes `'Dramaa'` impossible to
+   insert. `text[]` accepts any string at all.
+3. **The vocabulary becomes data.** The `genres` table *is* the list of valid
+   genres. With arrays you have to derive it — `SELECT DISTINCT g FROM movies,
+   unnest(genres) g` — and that only tells you what exists, not what is allowed.
+4. **Somewhere to put attributes.** If a genre later needs a description, a
+   parent genre, or a display order, a row can hold them. An array element is a
+   bare string with nowhere to hang anything.
+
+Why none of that bites here:
+
+- **The table is write-once.** `ingest.py` truncates and reloads. There is no
+  `UPDATE` path against `genres` anywhere in the codebase, so the update anomaly
+  in (1) cannot occur — not "is unlikely", cannot. A rename upstream is handled
+  by re-ingesting, which was going to be cheaper than an `UPDATE` regardless.
+- **The vocabulary is closed and not ours.** All 20 values come from TMDB and
+  are parsed, never typed. The typo a foreign key protects against in (2) is one
+  this pipeline has no way to introduce.
+- **A genre is only a name.** Nothing in this project needs (4), and adding a
+  join table on the chance that something might is speculative.
+- **Reads stay join-free.** `genres @> ARRAY['Comedy']` against a GIN index,
+  versus a two-table join, on the hot path of every filtered search.
+
+**The honest caveat on 1NF:** a purist would say a repeating group in one column
+violates first normal form. That objection was written about comma-separated
+strings in a `varchar`. A Postgres `text[]` is a typed, constrained, indexable
+column with real operators, which is a materially different thing — but "it's
+fine, it's an array" is not an argument, and the four points above are what
+actually carry the decision.
+
+**What would flip it:** genres becoming editable in the product, or needing any
+attribute of their own. Either one makes the array wrong, and migrating means
+rewriting all 45,433 rows.
 
 ---
 
