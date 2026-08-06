@@ -279,6 +279,143 @@ still works but emits a FutureWarning.
 
 ---
 
+## D-011: Encode every document, including the content-free ones
+
+**Chose:** all 45,433 documents get an embedding. No minimum content threshold.
+
+**The problem:** `search_text` quality is a gradient, not a binary.
+
+| tier | count | what the embedder reads |
+|---|---|---|
+| has overview | 44,474 | real prose |
+| no overview, has keywords | 205 | title + concept words (the D-005 rescue) |
+| no overview, no keywords, has genres/tagline | 519 | title + "Drama" |
+| title only | 235 | "Bix" |
+
+The 235 thinnest documents are 3–30 characters. Their vectors encode essentially
+nothing, and cosine similarity does not force an uninformative document to score
+low — it will sit at some arbitrary angle to every query.
+
+**Alternatives:**
+- Skip thin documents, leave `embedding` NULL — requires choosing a threshold of
+  235, 754, or 959, all defensible
+- Encode all, plus a `thin_document` boolean column to filter on later
+- Delete the 235 rows from the corpus
+
+**Why:** two reasons, and the second is the stronger one.
+
+1. Skipping them *asserts* that thin documents degrade retrieval. That is a
+   plausible belief and it is currently untested — there is no Judge layer yet,
+   so there is no number behind it. This project's claim is that improvement is
+   measured, not asserted; that has to apply to my own instincts too.
+
+2. **Encoding everything is the reversible choice.** With vectors present, the
+   thin documents can be excluded at *query* time with a `WHERE` clause, costing
+   nothing. Skipping them cannot be undone without a re-encode. Given the two
+   options are near-identical in cost, take the one that keeps the door open.
+
+Deleting the rows was rejected outright: they are real films, and trimming the
+corpus to look clean would falsify the 45,433 figure that D-003 and D-010 both
+depend on.
+
+**Cost / what this gives up:** 235 arbitrary vectors sit in the semantic index
+and may surface on queries they have no business matching. Nothing flags them,
+so isolating their effect later means re-deriving the tier query in this entry
+rather than reading a column.
+
+**How I'd settle it:** once precision@k and NDCG exist, run the held-out query
+set twice — once over the full corpus, once with the 235 excluded at query time.
+If the thin documents measurably pollute results, this entry gets revisited with
+a number attached instead of an instinct.
+
+---
+
+## D-012: No ANN index — exact search over the vectors
+
+**Chose:** no index on `movies.embedding`. Every semantic query sequentially
+scans all 45,433 vectors and returns the true nearest neighbours.
+
+**Alternatives:**
+- HNSW — a navigable graph, sub-millisecond queries, ~95–99% recall
+- IVFFlat — partitions vectors into lists, searches only the nearest few
+
+**Why:** an **ANN** (approximate nearest neighbour) index buys speed by
+*sometimes returning something other than the true nearest neighbours*. This
+project's entire claim is that a learned reranker measurably improves on a
+baseline. A baseline built on approximate retrieval carries an unknown recall
+loss baked in, so any later measurement could not separate the reranker's effect
+from the index's error. Exact search is cheap at this corpus size, so the speed
+an index would buy is currently worth nothing.
+
+**Cost / what this gives up:** query latency grows linearly with the corpus.
+Fine at 45,433 rows; not fine at 1M.
+
+**Measured:** median **128 ms** per semantic query over all 45,433 vectors
+(min 109, max 141; six queries, warm cache). The lexical arm runs 15–47 ms.
+
+The estimate when this decision was taken was 40–120 ms, so the real cost sits
+just above the range that was guessed. The decision stands — 128 ms is fine for
+a CLI — but the guess was optimistic and is recorded as such rather than quietly
+corrected.
+
+**How I'd settle it:** revisit when a query is slow enough to be annoying. At
+that point measure HNSW's actual recall *against these exact results* rather
+than trusting a published benchmark — the exact answers are available precisely
+because this decision was made first.
+
+---
+
+## D-013: Reciprocal Rank Fusion, K=60, 50 candidates per arm
+
+**Chose:** fuse the lexical and semantic lists with RRF. Each document scores
+`Σ 1/(K + rank)` summed over the arms that returned it, with K=60 and each arm
+contributing its top 50.
+
+**Alternatives:**
+- Weighted sum of normalised scores — `α·lexical + (1−α)·semantic`
+- Interleaving — alternate one result from each arm
+- Use one arm only and ignore the other
+
+**Why:** `ts_rank` values and cosine similarities are not comparable numbers.
+`ts_rank` runs from ~0.99 for a title hit down to ~0.06 for a plot-only match
+(D-008); cosine similarity sits in a narrow band and shifts with query length.
+A weighted sum requires normalising both onto a common scale, and there is no
+principled way to do it — min-max normalisation makes a document's score depend
+on whatever else happened to land in the same result list. RRF reads **rank
+position only**, so the two scales never have to be reconciled at all.
+
+**Cost / what this gives up:** discarding the scores throws away real
+information. A document that won its arm by a mile scores identically to one
+that barely won. RRF cannot express confidence.
+
+**Observed instance of that cost — the `Tom Hanks` query.** The lexical arm
+alone returns his films correctly: *The Man with One Red Shoe*, *Bachelor
+Party*, *From the Earth to the Moon*, *That Thing You Do!*. The semantic arm
+returns noise, exactly as D-004 predicts for proper nouns — *Blue Sky*,
+*Hank: 5 Years from the Brink*, *The Power and the Glory*.
+
+Fusing them promotes *Tom Sawyer* to rank 3, above genuine Hanks films, because
+both arms weakly agree on the token "Tom" (lexical rank 7, semantic rank 30).
+Two mediocre ranks outscore one strong one: `1/67 + 1/90 = 0.0260` against
+`1/62 = 0.0161`.
+
+So RRF actively **degrades** this query relative to the lexical arm alone. That
+is not an implementation bug — it is the cost above, appearing on the very first
+real query set. It is also precisely what the Judge layer exists to quantify and
+a strong candidate for what the learned reranker should learn to fix.
+
+**K=60 is not tuned.** It is the constant from Cormack, Clarke & Buettcher
+(2009), which is where nearly every RRF implementation takes it from. Larger K
+flattens the advantage of top ranks; smaller K lets rank 1 dominate. The
+50-candidate depth per arm is likewise a round number, not a result.
+
+**How I'd settle it:** K and the candidate depth are exactly the knobs the Judge
+layer exists to tune. Once NDCG against a held-out query set works, sweep K over
+{10, 30, 60, 100} and depth over {25, 50, 100}. Until then these are documented
+defaults, not findings.
+
+---
+
 ## Template
 
 ```markdown
