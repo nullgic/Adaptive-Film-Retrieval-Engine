@@ -8,3 +8,4 @@ models/
 *.parquet
 .ipynb_checkpoints/
 CLAUDE.md
+.claude/
