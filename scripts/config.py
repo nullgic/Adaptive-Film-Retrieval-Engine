@@ -17,14 +17,18 @@ CSV_CHUNK_SIZE = 5_000
 # --- document length -------------------------------------------------------
 
 # Rough stand-in for a real tokenizer: English averages ~1.3 BERT word-pieces
-# per whitespace word. Only used to flag whether documents are anywhere near a
-# model's context window. Replaced by the model's own tokenizer on embedding day.
+# per whitespace word. Measured at 1.29 across the corpus - accurate on average,
+# but it understated the maximum by 35% (482 estimated vs 653 actual), because
+# non-English text shatters into far more pieces per word. Fine for the
+# ingestion report; use scripts/check_model.py for anything decisive.
 WORDPIECE_PER_WORD = 1.3
 
 # Context windows of the models under consideration, for the ingestion report.
 CONTEXT_WINDOWS = {"all-MiniLM-L6-v2": 256, "BGE-small-en-v1.5": 512}
 
 # --- embedding -------------------------------------------------------------
-# EMBEDDING_MODEL and EMBEDDING_DIM land here on embedding day. Deliberately
-# unset: declaring a vector(N) column before the model is chosen would fix the
-# dimension, and re-embedding invalidates any baseline already measured.
+
+# Settled in D-010. EMBEDDING_DIM was read from the model, not from docs - the
+# vector(N) column must match exactly or every insert fails.
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+EMBEDDING_DIM = 384

@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS movies (
     ingested_at       timestamptz NOT NULL DEFAULT now()
 );
 
+-- The semantic half of the index. 384 is fixed by D-010 (BAAI/bge-small-en-v1.5)
+-- and confirmed from the model itself, not from documentation -- pgvector fixes
+-- the width at declaration, and a mismatch fails every insert.
+--
+-- ALTER rather than a column in CREATE TABLE above: CREATE TABLE IF NOT EXISTS
+-- skips entirely when the table exists, so it would never reach an existing
+-- volume. No ANN index yet -- the column is NULL until embeddings are written.
+ALTER TABLE movies ADD COLUMN IF NOT EXISTS embedding vector(384);
+
 -- GIN is the inverted-index access method: it maps each lexeme to the rows
 -- containing it, which is the whole point of full-text search.
 CREATE INDEX IF NOT EXISTS movies_search_tsv_idx ON movies USING GIN (search_tsv);

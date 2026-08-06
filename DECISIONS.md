@@ -195,12 +195,47 @@ rather than assuming documents fit.
 disappears. This measurement is what makes the model choice evidence-based
 rather than a guess.
 
+**Corrected (measured with the real tokenizer, `scripts/check_model.py`):** the
+numbers above came from the `WORDPIECE_PER_WORD = 1.3` estimate in config.py and
+the tail was wrong.
+
+| | estimated | measured |
+|---|---|---|
+| median | 81 | 80 |
+| p95 | 181 | 180 |
+| p99 | 222 | 225 |
+| **max** | **482** | **653** |
+| truncated at 256 | 30 (0.1%) | 74 (0.16%) |
+| truncated at 512 | 0 | 4 (0.01%) |
+
+The average ratio was fine — 1.29 measured against 1.3 assumed. The tail was not.
+A flat multiplier assumes every word costs the same number of word-pieces, and
+the document that blew the estimate is not even the longest one:
+
+| | chars | words | tokens |
+|---|---|---|---|
+| Werckmeister Harmonies | 2,480 | 368 | fits in 512 |
+| **Shadowboxing** | 806 | 133 | **653** |
+
+Shadowboxing's overview is written in Russian. An English-vocabulary tokenizer
+has no word-pieces for Cyrillic and falls back to near-per-character splitting —
+4.9 tokens per word against a corpus average of 1.29. No word-count estimate can
+see that coming.
+
+This is an outlier rather than a pattern: 20 overviews contain Cyrillic and 5
+contain CJK out of 45,433. Foreign-language *films* are common (2,436 French,
+1,347 Japanese, 826 Russian) but their overviews are written in English.
+
+**The lesson stands and gets sharper:** the estimate was good enough to make the
+right shortlist and not good enough to make the decision. "Against 512, zero"
+was false.
+
 ---
 
-## D-010: Embedding model — OPEN
+## D-010: Embedding model — `BAAI/bge-small-en-v1.5`
 
-**Leading candidate:** `BAAI/bge-small-en-v1.5` — 384 dimensions, 512-token
-window.
+**Chose:** `BAAI/bge-small-en-v1.5`. 384 dimensions, 512-token window, both read
+off the model itself via `scripts/check_model.py`, not from documentation.
 
 **Alternatives:**
 - `all-MiniLM-L6-v2` — 384 dims, 256-token window, the common default
@@ -208,18 +243,39 @@ window.
 - `multi-qa-mpnet-base-dot-v1` — 768 dims, tuned for query-to-passage matching
 - API embeddings (OpenAI, Cohere) — likely better, cost money, add latency
 
-**Reasoning so far:** BGE-small gives the same column width as MiniLM with twice
-the context window and better retrieval benchmarks. At 45k documents the speed
-difference between 384 and 768 dimensions barely matters, so this should be
-decided on quality rather than speed.
+**Why:** measured against the real corpus, both 384-dim candidates were checked
+with their own tokenizers over all 45,433 documents:
 
-**Before committing:** confirm the dimension count directly from the model —
-`m.get_sentence_embedding_dimension()` — rather than trusting a number from
-documentation. The `vector(N)` column must match exactly or every insert fails.
+| model | window | documents truncated |
+|---|---|---|
+| BGE-small-en-v1.5 | 512 | 4 (0.01%) |
+| all-MiniLM-L6-v2 | 256 | 74 (0.16%) |
+
+Same column width, same storage cost, 18× fewer truncated documents. MiniLM's
+narrower window buys nothing back. The two mpnet models were not measured —
+they would double the column to 768 dims, and that tradeoff was not worth
+testing before a baseline exists to measure any gain against.
+
+**Cost / what this gives up:** benchmark scores favour the 768-dim mpnet models.
+This picks the cheaper column without evidence that the more expensive one would
+retrieve better *on this corpus* — that comparison needs the Judge layer, which
+does not exist yet.
+
+**Not zero:** 4 documents still exceed 512 tokens and will be silently cut. The
+longest document in the corpus is 653 tokens (`Shadowboxing`, see D-009). No
+384-dim option avoids this. Accepted at 0.01%, and the affected films keep their
+full lexical index either way, so they remain findable.
+
+**How I'd settle the mpnet question:** once precision@k and NDCG exist against
+the held-out query set, re-embed with `all-mpnet-base-v2` and compare.
 
 **Note:** re-embedding later is not catastrophic here. Because users are
 simulated, a model change means regenerating sessions and recomputing the
 baseline — an evening's work, not a lost project.
+
+**API note:** this entry originally specified `m.get_sentence_embedding_dimension()`.
+sentence-transformers 5.x renamed it to `get_embedding_dimension()`; the old name
+still works but emits a FutureWarning.
 
 ---
 
