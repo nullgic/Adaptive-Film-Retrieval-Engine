@@ -10,6 +10,7 @@ Reciprocal Rank Fusion on rank position alone (D-013).
 """
 import argparse
 import time
+from typing import NamedTuple
 
 from pgvector.psycopg import register_vector
 from sentence_transformers import SentenceTransformer
@@ -74,6 +75,63 @@ def rrf(arms):
     return sorted(fused.values(), key=lambda entry: -entry["score"])
 
 
+class Results(NamedTuple):
+    """One search, with both arms kept alongside the fused list.
+
+    A NamedTuple is a tuple whose positions have names, so callers read
+    `results.fused` instead of `results[1]`. The arms are returned unfused as
+    well because the interesting question is usually not what the ranking is,
+    but which arm produced it.
+    """
+    query: str
+    fused: list
+    lexical: list
+    semantic: list
+    lexical_ms: float
+    semantic_ms: float
+
+
+def search(query, conn, model, k=10, depth=CANDIDATE_DEPTH):
+    """Run both arms and fuse them. Returns Results.
+
+    `conn` and `model` are passed in rather than built here, because both are
+    expensive and reusable: loading the model costs seconds, and a caller
+    running a query set wants one model and one connection for all of them.
+
+    The connection must already have pgvector's register_vector applied, or
+    passing the query vector as a parameter fails. open_connection() below
+    does that.
+    """
+    # The instruction prefix goes on the query and never on the documents.
+    # embed.py deliberately does not apply it - see QUERY_PREFIX in config.py.
+    query_vector = model.encode(QUERY_PREFIX + query, normalize_embeddings=True)
+
+    with conn.cursor() as cur:
+        started = time.perf_counter()
+        lexical = run_arm(cur, LEXICAL_SQL, (query, depth))
+        lexical_ms = (time.perf_counter() - started) * 1000
+
+        started = time.perf_counter()
+        semantic = run_arm(cur, SEMANTIC_SQL, (query_vector, query_vector, depth))
+        semantic_ms = (time.perf_counter() - started) * 1000
+
+    return Results(
+        query=query,
+        fused=rrf({"lexical": lexical, "semantic": semantic})[:k],
+        lexical=lexical,
+        semantic=semantic,
+        lexical_ms=lexical_ms,
+        semantic_ms=semantic_ms,
+    )
+
+
+def open_connection():
+    """connect() plus the pgvector type adapter, which search() requires."""
+    conn = connect()
+    register_vector(conn)
+    return conn
+
+
 def show_arm(label, results, limit):
     print(f"\n{label} - {len(results)} candidates")
     if not results:
@@ -104,30 +162,17 @@ def main():
 
     model = SentenceTransformer(EMBEDDING_MODEL)
 
-    # The instruction prefix goes on the query and never on the documents.
-    # embed.py deliberately does not apply it - see QUERY_PREFIX in config.py.
-    query_vector = model.encode(QUERY_PREFIX + args.query, normalize_embeddings=True)
-
-    with connect() as conn:
-        register_vector(conn)
-        with conn.cursor() as cur:
-            started = time.perf_counter()
-            lexical = run_arm(cur, LEXICAL_SQL, (args.query, args.depth))
-            lexical_ms = (time.perf_counter() - started) * 1000
-
-            started = time.perf_counter()
-            semantic = run_arm(cur, SEMANTIC_SQL,
-                               (query_vector, query_vector, args.depth))
-            semantic_ms = (time.perf_counter() - started) * 1000
+    with open_connection() as conn:
+        results = search(args.query, conn, model, k=args.k, depth=args.depth)
 
     if args.explain:
-        show_arm("lexical (ts_rank)", lexical, args.k)
-        show_arm("semantic (cosine)", semantic, args.k)
+        show_arm("lexical (ts_rank)", results.lexical, args.k)
+        show_arm("semantic (cosine)", results.semantic, args.k)
 
-    print(f"\nquery: {args.query!r}")
-    show_fused(rrf({"lexical": lexical, "semantic": semantic}), args.k)
-    print(f"\nlexical {lexical_ms:.0f}ms   semantic {semantic_ms:.0f}ms "
-          f"(exact scan, no index - D-012)")
+    print(f"\nquery: {results.query!r}")
+    show_fused(results.fused, args.k)
+    print(f"\nlexical {results.lexical_ms:.0f}ms   "
+          f"semantic {results.semantic_ms:.0f}ms (exact scan, no index - D-012)")
 
 
 if __name__ == "__main__":
