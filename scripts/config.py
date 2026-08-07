@@ -40,7 +40,11 @@ EMBEDDING_DIM = 384
 # with no error to notice.
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
-# Candidates pulled from each arm before fusion, and the RRF constant. Both are
-# documented defaults rather than tuned values - see D-013.
-CANDIDATE_DEPTH = 50
+# Candidates pulled from each arm before fusion. Set by measurement in D-014:
+# lexical recall against 68 known Tom Hanks films is 0.69 at depth 50 and 1.00
+# at 100, and nothing beyond 100 adds anything. Below 100, documents are missing
+# from the pool entirely and no reranker can ever surface them.
+CANDIDATE_DEPTH = 100
+
+# The RRF constant is still an untuned default from Cormack et al. - see D-013.
 RRF_K = 60

@@ -461,12 +461,15 @@ defaults, not findings.
 
 ---
 
-## D-014: Candidate depth — OPEN, but the measurement is in
+## D-014: Candidate depth — `CANDIDATE_DEPTH = 100`
 
-**Leading candidate:** raise `CANDIDATE_DEPTH` from 50 to **100**.
+**Chose:** raise `CANDIDATE_DEPTH` from 50 to **100**, settled 2026-08-06.
 
 **The question:** how many candidates each arm contributes before fusion. D-013
 set it to 50 as a round number and said so.
+
+**Alternatives:** keep 50 (the D-013 default); go deeper — 200, 500, 1000; leave
+the constant at 50 and treat 100 as a per-run `--depth` flag.
 
 **What was measured** (see `QUERIES.md` for the full analysis): recall@k against
 two ground-truth sets derived from columns the retriever never sees as queries —
@@ -505,9 +508,18 @@ that more candidates means more weak two-arm agreements. Measured, the opposite
 happened — *Tom Sawyer* held rank 3 at both depths, and *Bachelor Party*, a real
 Hanks film, moved up from 5 to 4.
 
-**Deliberately still open:** the number is a design decision and this entry
-records the evidence, not the choice. Same pattern D-010 used before the model
-was settled.
+**Cost / what this gives up:** two things. Fusion arithmetic doubles, which is
+negligible against a 128 ms exact scan. More real: 100 is settled against *two*
+ground-truth sets, both built from `cast_names` and `directors`. Those are
+name-shaped queries, where the lexical arm does the work. No abstract query has
+a ground-truth set yet, so nothing here proves 100 is deep enough for the
+semantic arm — only that it is not the binding constraint for names.
+
+**Still to be re-swept, and not by hand:** D-013 says `RRF_K` and depth are the
+same kind of knob and should be tuned together once the Judge layer computes
+NDCG. Settling depth now does not cancel that sweep; it replaces an unmeasured
+round number with a measured one so the Learner has a complete pool to rerank
+from in the meantime. Re-open this entry when K × depth is swept properly.
 
 **What this does not fix:** depth is irrelevant to two of the four failures.
 `Speilberg` scores recall 0.00 at every k in both arms — a misspelling is a
