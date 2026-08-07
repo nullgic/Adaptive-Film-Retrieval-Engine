@@ -461,6 +461,62 @@ defaults, not findings.
 
 ---
 
+## D-014: Candidate depth — OPEN, but the measurement is in
+
+**Leading candidate:** raise `CANDIDATE_DEPTH` from 50 to **100**.
+
+**The question:** how many candidates each arm contributes before fusion. D-013
+set it to 50 as a round number and said so.
+
+**What was measured** (see `QUERIES.md` for the full analysis): recall@k against
+two ground-truth sets derived from columns the retriever never sees as queries —
+68 films with `Tom Hanks` in `cast_names`, 33 with `Steven Spielberg` in
+`directors`.
+
+| k | `Tom Hanks` lexical recall | `Spielberg` lexical recall |
+|---|---|---|
+| 50 | 0.69 | 0.91 |
+| **100** | **1.00** | **1.00** |
+| 200–1000 | 1.00 | 1.00 |
+
+At depth 50, **21 of 68 Tom Hanks films are outside the candidate pool** — a
+reranker could never surface them, because it never sees them. At 100 the pool
+is complete for both sets, and nothing beyond 100 adds anything.
+
+**Why not deeper than 100:** measured, not assumed. Fused top-10s were compared
+at depth 50 against depth 500 across all ten queries in `QUERIES.md`. Six were
+identical; the four that changed reordered the same titles without admitting new
+ones. `1/(K + rank)` decays fast enough that a rank-500 document contributes 11%
+of a rank-1 document — enough to nudge, never enough to upset.
+
+**The cost is close to zero.** The exact scan already compares all 45,433
+vectors regardless of `LIMIT` (D-012), so the semantic arm's cost is unchanged;
+only the fusion arithmetic grows, and it is a dictionary update per candidate.
+
+**What raising depth does NOT do:** it does not change what the user sees today.
+*WALL·E* sits at semantic rank 115 for `lonely robot in space`, and at depth 500
+it still does not enter the visible top 10, because a single-arm rank-115
+document scores below the cut. Depth widens what a *reranker* can promote from.
+It is an investment in the ceiling, not a fix for the present ranking.
+
+**Prediction that was wrong, recorded rather than deleted:** I expected a deeper
+pool to worsen the `Tom Hanks` / `Tom Sawyer` regression in D-013, on the theory
+that more candidates means more weak two-arm agreements. Measured, the opposite
+happened — *Tom Sawyer* held rank 3 at both depths, and *Bachelor Party*, a real
+Hanks film, moved up from 5 to 4.
+
+**Deliberately still open:** the number is a design decision and this entry
+records the evidence, not the choice. Same pattern D-010 used before the model
+was settled.
+
+**What this does not fix:** depth is irrelevant to two of the four failures.
+`Speilberg` scores recall 0.00 at every k in both arms — a misspelling is a
+different token, and that needs `pg_trgm`. `film about grief` has all eleven
+targets outside the top 50 with the best at rank 70 and the worst at 18,057 —
+that is the embedding failing to encode theme, and no depth reaches it.
+
+---
+
 ## Template
 
 ```markdown

@@ -258,26 +258,160 @@ the vector arm structurally cannot.
 | fails | 4 | Tom Hanks, lonely robot in space, Speilberg, Russian query |
 | degenerate | 1 | the |
 
-## What this actually says
+## Ceiling analysis — where the correct answers actually rank
 
-**Three distinct failure causes, not one.**
+The narration above says *why* each query failed. It does not say whether the
+failure is recoverable, and that is the question that decides how much a
+reranker can ever be worth.
 
-*Tom Hanks* and *film about grief* fail **inside the fusion** — both arms
-retrieved reasonable things and RRF combined them badly, promoting weak
-agreement over strong single-arm evidence. A reranker could learn to fix these,
-because the right documents are already in the candidate pool.
+Two kinds of failure, and they have completely different futures:
 
-*lonely robot in space* and the Russian query fail **in retrieval** — the right
-document was never surfaced highly enough for any reranking to save it. No
-amount of reordering fixes a candidate list that does not contain the answer.
+- **Ranking miss** — the correct film *is* in the candidate pool, ranked below
+  the cut. A reranker can promote it. These are the Learner's job.
+- **Retrieval miss** — the correct film never entered the pool. No reordering
+  recovers it. These set the ceiling.
 
-*Speilberg* fails **before retrieval**, at query understanding. Neither arm has
-any mechanism for edit distance.
+To tell them apart, each failing query was measured against a set of correct
+documents, ranking the **whole 45,433-row corpus** per arm with a window
+function rather than looking at the truncated top 50.
 
-That split matters for what comes next. The Learner can only address the first
-group. The second needs better retrieval, the third needs `pg_trgm` or a spelling
-correction step — and knowing which is which is only possible because the arms
-were kept separately inspectable.
+Two of the target sets are real ground truth, derived from columns the
+retriever never sees as a query: `cast_names @> ARRAY['Tom Hanks']` gives 68
+films, `directors @> ARRAY['Steven Spielberg']` gives 33. The other two are
+target sets I nominated by hand and are labelled as judgment.
+
+### Results
+
+| query | targets | basis | ranking misses | verdict |
+|---|---|---|---|---|
+| `Tom Hanks` | 68 | ground truth | 47/68 in top 50 | **depth-fixable** |
+| `Speilberg` | 33 | ground truth | 0/33 | **not fixable by depth** |
+| `Spielberg` (control) | 33 | ground truth | 30/33 in top 50 | works |
+| `lonely robot in space` | 6 | judgment | 2/6 | mixed |
+| `film about grief` | 11 | judgment | 0/11 | **retrieval failure** |
+| `боксёр против мафии` | 1 | objective | 1/1 (rank 19) | **ranking miss** |
+| `Bix` (sanity check) | 1 | objective | rank 1 in both arms | control passed |
+
+### Recall@k — the depth question, answered
+
+| k | `Tom Hanks` lexical | `Spielberg` lexical |
+|---|---|---|
+| 50 | 0.69 | 0.91 |
+| **100** | **1.00** | **1.00** |
+| 200 | 1.00 | 1.00 |
+| 500 | 1.00 | 1.00 |
+
+Every one of the 68 Tom Hanks films sits at lexical rank ≤ 100. At the current
+depth of 50, **21 of them are invisible to the reranker before it starts.**
+Doubling depth to 100 makes the candidate pool complete for both ground-truth
+queries. Nothing beyond 100 adds anything.
+
+The semantic arm is useless for both: recall@1000 is **0.09** for Tom Hanks and
+**0.09** for Spielberg. That is D-004 confirmed with a number — dense embeddings
+do not retrieve by proper noun, which is exactly why cast and director names
+were kept out of `search_text`.
+
+### `Speilberg` — no depth fixes this
+
+Recall is **0.00 at every k, in both arms.** All 33 films are lexically
+unreachable, because `Speilberg` and `Spielberg` are simply different tokens
+and `ts_rank` has no notion of edit distance. The correctly-spelled control
+scores 0.91 at k=50, which isolates the cause precisely: the retriever finds
+directors fine, and cannot survive a typo. This needs `pg_trgm`, not depth and
+not a reranker.
+
+### `film about grief` — the real ceiling
+
+| film | semantic rank |
+|---|---|
+| Collateral Beauty | 70 |
+| Ordinary People | 82 |
+| The Sweet Hereafter | 378 |
+| Manchester by the Sea | 560 |
+| In the Bedroom | 7,487 |
+| A Monster Calls | 18,057 |
+
+Zero of eleven inside the top 50, and all eleven lexically unreachable. Depth
+1000 would reach seven of them. *A Monster Calls* — a film explicitly about a
+child processing his mother's death — sits at rank **18,057 of 45,433**.
+
+The model is matching surface vocabulary, not theme. A plot summary about grief
+rarely contains the word "grief", and nothing in `search_text` encodes what a
+film is *about* at that level. No amount of depth or reranking fixes this; it is
+a limit of what a 384-dimension sentence embedding of a plot summary can
+represent.
+
+### The tension that did not appear
+
+Prediction before measuring: a deeper candidate pool would make RRF worse, since
+more candidates means more chances for weak two-arm agreement to outrank strong
+single-arm evidence — the `Tom Sawyer` failure mode.
+
+**That did not happen.** Comparing fused top-10s at depth 50 against depth 500
+across all ten queries: six were byte-identical, and the four that changed
+shuffled the *same* titles rather than admitting new ones. *Tom Sawyer* stayed
+at rank 3 in both. *Bachelor Party*, a real Hanks film, moved **up** from 5 to 4.
+
+The reason is the shape of `1/(K + rank)`. At K=60 a rank-500 document
+contributes `1/560 = 0.0018` against a rank-1 document's `1/61 = 0.0164` — about
+11%. Deep candidates apply small nudges; they cannot stage upsets.
+
+Which yields the important subtlety: **raising depth barely changes what the
+user sees today. It changes what the reranker will be able to see.** Depth 500
+does not pull *WALL·E* (semantic rank 115) into the visible top 10 either — a
+single-arm rank-115 document scores below the cut. But it does put it in the
+pool, where a trained reranker could promote it. Depth is an investment in the
+ceiling, not a fix for the present.
+
+### The degenerate query is not a bug
+
+`the` was suspected of being structural. It is not.
+
+`websearch_to_tsquery('english', 'the')` returns an **empty tsquery**,
+`numnode = 0`, with Postgres explicitly raising `NOTICE: text-search query
+contains only stop words or doesn't contain lexemes, ignored`. Returning zero
+lexical results is correct and deliberate.
+
+Hubness was the other candidate — the tendency of a few documents in
+high-dimensional space to be nearest neighbours to almost anything. Tested with
+six degenerate queries:
+
+| pair | Jaccard overlap of top-10 |
+|---|---|
+| `a` vs `.` | 0.43 |
+| `the` vs `a` | 0.18 |
+| `the` vs `.` | 0.11 |
+| `zzzz` vs `xyzzy` | 0.05 |
+
+So there is **mild, bounded hubness among near-contentless queries** —
+*The Great Passage* and *Brief Crossing* recur across `the`, `a` and `.`. That
+is expected: short contentless strings embed near each other, so they retrieve
+similar neighbourhoods. Nonsense-but-distinct strings (`zzzz`, `xyzzy`) overlap
+almost not at all, which confirms these are not global attractors.
+
+Across the ten real queries, exactly one document (*Bipedalism*) appeared in
+more than one top 10. **There are no hub documents polluting real results.**
+
+### What this means for the Learner, and for personas
+
+| category | queries | can a reranker help? |
+|---|---|---|
+| ranking miss | Russian query, `Tom Hanks` (47 of 68), `lonely robot` (2 of 6) | **yes** |
+| retrieval miss, depth-fixable | `Tom Hanks` (21 of 68), `lonely robot` (WALL·E at 115) | only after depth rises |
+| retrieval miss, not depth-fixable | `film about grief` (all 11) | no |
+| query understanding | `Speilberg` (all 33) | no — needs `pg_trgm` |
+
+The reranker has real work available, so the project is not ceiling-bound. But
+the ceiling is uneven, and it is uneven **by query type**: proper-noun queries
+are healthy once depth reaches 100, and abstract-theme queries are close to
+hopeless with this embedding.
+
+That should shape the personas directly. Simulated users whose queries are
+mostly proper nouns and concrete plot elements will exercise a retriever that
+can actually serve them, and the reranker's improvement will be measurable.
+Personas that search by theme and mood would mostly be measuring the embedding
+model's ceiling instead of the Learner's contribution — which would make week 4
+look like a failure of the reranker when it was a failure of retrieval.
 
 **Also worth noting:** the semantic arm always returns exactly 50 candidates,
 because every document has a vector and there is always a 50th nearest
