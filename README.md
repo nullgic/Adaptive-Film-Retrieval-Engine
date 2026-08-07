@@ -119,6 +119,29 @@ try.
 
 ---
 
+## How improvement will be reported
+
+Not as one number.
+
+The held-out query set is deliberately **mixed** — concrete queries (proper
+nouns, plot elements) alongside abstract ones (themes, moods) — and the
+reranker's lift is reported **split by category**: concrete +X%, abstract +Y%.
+Never pooled into a single headline figure.
+
+Pooling would make the result depend on the query mix rather than on the
+reranker. Shift the proportion of abstract queries and the "improvement" moves
+while the model stays identical, which makes the number unreproducible by anyone
+who samples queries differently. It would also hide the more interesting result.
+
+Because the ceiling has already been measured per query type, the **gap between
+the two categories is the finding**, and it is attributable: abstract queries
+lag because their correct answers were never in the candidate pool for the
+reranker to reorder. That is a retrieval failure, not a ranking one. A single
+averaged number would state that the reranker underperformed and leave the
+reason invisible. See D-015.
+
+---
+
 ## Honest limitations
 
 Ten queries are recorded in [QUERIES.md](QUERIES.md), including the four that
@@ -136,9 +159,23 @@ fail. Briefly:
   English-only model, but worth knowing.
 - **The vector arm cannot return nothing.** Every query has a nearest neighbour,
   so a meaningless query still gets five confident results.
+- **Abstract queries fail — and the cause is the embedding, not the corpus.**
+  *A Monster Calls* ranks 18,057 of 45,433 for `film about grief`. It carries the
+  keyword `death of mother`, that string sits verbatim in the document the
+  embedder read, and the film still ranks **6,273rd for that exact query**. Its
+  similarity holds inside a 0.07 band for every thematic phrasing but reaches
+  0.746 for a plot-literal one. The thematic metadata is present and reached the
+  vector; mean pooling dilutes it. See D-016.
 
 None of these are fixed yet, and fixing them before the Judge layer exists would
 mean claiming an improvement with nothing to measure it against.
+
+That last one is the clearest case. The keyword-vector fix — encode `keywords`
+into their own column and fuse a third arm — is the best-evidenced idea in the
+project right now, which is exactly why it is scheduled for week 5 rather than
+built today. Doing it now would make week 4 report "abstract queries improved"
+with no way to separate the new arm's contribution from the reranker's. Deferred
+with a stated reason and a date, not left undone.
 
 ---
 

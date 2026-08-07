@@ -529,6 +529,108 @@ that is the embedding failing to encode theme, and no depth reaches it.
 
 ---
 
+## D-015: Report reranker lift split by query category, not pooled
+
+**Chose:** the held-out query set stays **mixed** — concrete queries (proper
+nouns, plot elements) and abstract queries (themes, moods) both included — and
+the Learner's improvement is reported **split by category**, never averaged into
+one headline number.
+
+**Alternatives:**
+- Pool everything into one number — "the reranker improved NDCG@10 by X%"
+- Concrete queries only — a clean, large, honest-looking number
+- Abstract queries only — measures the hardest case and little else
+
+**Why:** the ceiling is uneven *by query type*, and that is already measured, not
+assumed. The failure table in `QUERIES.md` sorts every miss into ranking misses
+(a reranker can fix), depth-fixable retrieval misses (fixed by D-014), and
+retrieval misses no reranker can reach (`film about grief`, all eleven targets).
+Averaging those together produces a number that is a weighted average of the
+query mix rather than a property of the reranker — change the proportion of
+abstract queries and the "improvement" moves without the reranker changing at
+all. A pooled number is therefore not reproducible by anyone who samples queries
+differently.
+
+Split reporting makes the *gap* the finding: concrete +X%, abstract +Y%, and the
+difference attributable to **retrieval**, not to ranking, because the abstract
+targets were never in the candidate pool for the reranker to reorder.
+
+**Cost / what this gives up:** the headline number gets smaller and there is no
+single figure to quote. Two categories also means each is computed over fewer
+queries, so both carry wider error bars than a pooled figure would — which is
+honest, since the pooled figure's tightness was an artifact of mixing two
+populations.
+
+**Consequence for the personas:** simulated users must issue both kinds of query
+in known proportion. If the personas only ever ask concrete questions, the
+abstract category has no data and the split cannot be computed.
+
+**How I'd know it was wrong:** if the two categories move together across
+several reranker versions, the split is measuring noise rather than a real
+divide, and one pooled number would be the more honest summary.
+
+---
+
+## D-016: The abstract-query failure is the embedding, not the corpus — fix deferred
+
+**Chose:** record the finding and **change nothing now**. The keyword-vector
+experiment is scheduled for week 5, after the Judge layer exists.
+
+**What was measured** (2026-08-07): `A Monster Calls` (movie_id 258230) ranks
+18,057 of 45,433 for `film about grief`. Its `keywords` array holds 18 entries
+including `death of mother`, `terminal illness`, and `disease`, and those
+strings are present **verbatim** in the `search_text` the embedder read.
+
+| query | rank of *A Monster Calls* | cosine similarity |
+|---|---|---|
+| `film about grief` | 18,057 | 0.5226 |
+| `grief` | 10,104 | 0.5212 |
+| `death of mother` | **6,273** | 0.5163 |
+| `a child coping with the death of a parent` | 1,222 | 0.5820 |
+| `boy and a monster tree` | **1** | 0.7463 |
+
+`death of mother` is a literal substring of the document, and the document still
+ranks 6,273rd for it. The film's similarity sits in a 0.07 band (0.516–0.582)
+across every thematic phrasing, then jumps to 0.746 for a plot-literal one. The
+document vector responds to plot description and is close to deaf to its own
+keyword block — consistent with mean pooling averaging ~20 keyword phrases into a
+vector already dominated by title and overview. The rank-1 result for `grief` is
+*The Grief of Others* and for `death of mother` is *The Eyes of My Mother*: the
+model is rewarding surface overlap over theme.
+
+**This corrects an earlier claim.** The ceiling analysis in `QUERIES.md` said
+"nothing in `search_text` encodes what a film is *about* at that level" and
+attributed the failure to a limit of embedding "a plot summary". Both are wrong.
+The thematic metadata is present and did reach the vector. The corpus is richer
+than the analysis assumed; the embedding is the bottleneck. Corrected in place
+there rather than deleted.
+
+**Alternatives considered now and rejected:**
+- **Third arm — a keyword-only vector column,** fused as a third list, so the
+  thematic signal is never diluted by plot text
+- **Query expansion on the lexical arm** — `grief` expands to related keyword
+  strings, which already sit in `facets_text`. Needs a synonym source we do not
+  have
+- Swap to a larger embedding model — re-opens D-010 and re-encodes the corpus
+
+**Why defer:** the third arm is now the best-evidenced idea in the project, and
+that is exactly why it must not be built this week. Building it before the Judge
+exists means week 4 reports "abstract queries improved" with no way to attribute
+the improvement between the new arm and the reranker — the confound this project
+exists to avoid. The same principle settled D-012 (no ANN index) and D-014.
+
+**Scheduled, not shelved — week 5.** Encode `keywords` into its own
+`vector(384)` column, fuse three arms, and measure against the two-arm baseline
+the Judge will have established. That is a clean, isolated, single-variable
+change with a baseline to measure against, which it cannot be today.
+
+**Cost / what this gives up:** abstract queries stay broken through weeks 3 and
+4, and the reranker will be trained against a retriever with a known blind spot.
+Accepted, because the blind spot is measured and reportable under D-015 rather
+than hidden inside a pooled average.
+
+---
+
 ## Template
 
 ```markdown

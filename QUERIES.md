@@ -341,6 +341,43 @@ film is *about* at that level. No amount of depth or reranking fixes this; it is
 a limit of what a 384-dimension sentence embedding of a plot summary can
 represent.
 
+> **Superseded 2026-08-07 — the paragraph above is wrong and is kept for the
+> record.** Two claims in it were guesses stated as fact, and measuring them
+> falsified both.
+>
+> **Claim 1: "nothing in `search_text` encodes what a film is *about* at that
+> level."** False. *A Monster Calls* carries 18 keywords including
+> `death of mother`, `terminal illness` and `disease`, and all three appear
+> **verbatim** in the `search_text` the embedder read. The thematic metadata is
+> there and it did reach the vector.
+>
+> **Claim 2: "a limit of ... embedding a plot summary."** Mis-framed. The
+> embedder read a plot summary *plus* that keyword block, not a plot summary
+> alone.
+>
+> What is actually happening, measured across five phrasings:
+>
+> | query | rank | cosine similarity |
+> |---|---|---|
+> | `film about grief` | 18,057 | 0.5226 |
+> | `grief` | 10,104 | 0.5212 |
+> | `death of mother` | **6,273** | 0.5163 |
+> | `a child coping with the death of a parent` | 1,222 | 0.5820 |
+> | `boy and a monster tree` | **1** | 0.7463 |
+>
+> `death of mother` is a literal substring of the document and the document
+> still ranks 6,273rd for it. Similarity stays inside a 0.07 band for every
+> thematic phrasing, then jumps to 0.746 for a plot-literal one — the document
+> vector answers to plot description and is nearly deaf to its own keyword
+> block, which is what mean-pooling ~20 keyword phrases into a title-and-
+> overview-dominated vector would predict.
+>
+> So the corrected conclusion is **stronger, not weaker**: the corpus is not
+> thematically empty, the embedding is diluting metadata it was given. That
+> makes the abstract-query ceiling raisable rather than data-bound — see D-016,
+> which schedules the keyword-vector experiment for week 5 rather than building
+> it before there is a baseline to measure it against.
+
 ### The tension that did not appear
 
 Prediction before measuring: a deeper candidate pool would make RRF worse, since
